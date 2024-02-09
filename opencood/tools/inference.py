@@ -18,7 +18,7 @@ from opencood.data_utils.datasets import build_dataset
 from opencood.utils import eval_utils
 from opencood.visualization import vis_utils
 import matplotlib.pyplot as plt
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 def test_parser():
     parser = argparse.ArgumentParser(description="synthetic data generation")
@@ -29,6 +29,16 @@ def test_parser():
                         help='late, early or intermediate')
     parser.add_argument('--show_vis', action='store_true',
                         help='whether to show image visualization result')
+    parser.add_argument('--adv_attack', action='store_true',
+                        help='whether to do an adversarial attack ')
+    parser.add_argument('--adv_attacker', default=1, type=int,
+                        help='whether to do an adversarial attack ')
+    parser.add_argument('--adv_eps', default=0.01, type=float,
+                        help='magnitude of adversarial perturbation ')
+    parser.add_argument('--adv_alpha', default=0.1, type=float,
+                        help='alpha of adversarial perturbation ')
+    parser.add_argument('--random_perturb', action='store_true',
+                        help='whether to do perturb the intermediate features of an attacker randomly ')
     parser.add_argument('--show_sequence', action='store_true',
                         help='whether to show video visualization result.'
                              'it can note be set true with show_vis together ')
@@ -71,7 +81,10 @@ def main():
     print('Loading Model from checkpoint')
     saved_path = opt.model_dir
     _, model = train_utils.load_saved_model(saved_path, model)
-    model.eval()
+
+
+    #for k, v in model.named_parameters():
+        #print(v.requires_grad)
 
     # Create the dictionary for evaluation
     result_stat = {0.3: {'tp': [], 'fp': [], 'gt': 0},
@@ -97,8 +110,51 @@ def main():
 
     for i, batch_data in tqdm(enumerate(data_loader)):
         # print(i)
+        batch_data = train_utils.to_device(batch_data, device)
+        ###adversarial attack#####
+        if opt.adv_attack:
+
+            criterion = train_utils.create_loss(hypes)
+            model.train()
+            # freeze model parameters
+            for k, v in model.named_parameters():
+                v.requires_grad = False
+
+            # fix attackers, agent 1 always attacks
+            # could sample a random attacker as well, or be learned
+            attacker = opt.adv_attacker
+
+            # initialize perturbation magnitude
+            adv_eps = opt.adv_eps
+            # batch_data['adv_eps'] = adv_eps
+
+            # initialize perturbation alpha
+            pert_alpha = opt.adv_alpha
+
+            # initialize perturbation tensor
+            pert = torch.empty(384, 96, 352).uniform_(-adv_eps, adv_eps)
+
+            # adversarial attack steps (PGD)
+            adv_steps = 10
+            for _ in range(adv_steps):
+                pert.requires_grad = True
+                # Introduce adv perturbation
+                batch_data['ego']['pert'] = pert.to(device)
+                output = model.adv_step(batch_data['ego'], attacker, adv_eps)
+                loss = criterion(output, batch_data['ego']['label_dict'])
+                #loss *= -1
+                grad = torch.autograd.grad(loss, pert, retain_graph=False, create_graph=False)[0]
+                pert = pert + pert_alpha * grad.sign()
+                pert.detach_()
+
+            # Detach and clone perturbations from Pytorch computation graph, in case of gradient misuse.
+            pert = pert.detach().clone()
+
+            # Apply the final perturbation to attackers' feature maps.
+            batch_data['ego']['pert'] = pert.to(device)
+
+        model.eval()
         with torch.no_grad():
-            batch_data = train_utils.to_device(batch_data, device)
             if opt.fusion_method == 'late':
                 pred_box_tensor, pred_score, gt_box_tensor = \
                     inference_utils.inference_late_fusion(batch_data,
@@ -108,12 +164,14 @@ def main():
                 pred_box_tensor, pred_score, gt_box_tensor = \
                     inference_utils.inference_early_fusion(batch_data,
                                                            model,
-                                                           opencood_dataset)
+                                                           opencood_dataset,
+                                                           opt)
             elif opt.fusion_method == 'intermediate':
                 pred_box_tensor, pred_score, gt_box_tensor = \
                     inference_utils.inference_intermediate_fusion(batch_data,
                                                                   model,
-                                                                  opencood_dataset)
+                                                                  opencood_dataset,
+                                                                  opt)
             else:
                 raise NotImplementedError('Only early, late and intermediate'
                                           'fusion is supported.')

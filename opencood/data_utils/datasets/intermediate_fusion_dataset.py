@@ -59,6 +59,9 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
 
         processed_data_dict = OrderedDict()
         processed_data_dict['ego'] = {}
+        camera_files = []
+        #first_key = list(base_data_dict.keys())[0]
+        #print(base_data_dict[first_key].keys())
 
         ego_id = -1
         ego_lidar_pose = []
@@ -68,12 +71,12 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
             if cav_content['ego']:
                 ego_id = cav_id
                 ego_lidar_pose = cav_content['params']['lidar_pose']
+                #camera_files = cav_content['camera0']
                 break
         assert cav_id == list(base_data_dict.keys())[
             0], "The first element in the OrderedDict must be ego"
         assert ego_id != -1
         assert len(ego_lidar_pose) > 0
-
         pairwise_t_matrix = \
             self.get_pairwise_transformation(base_data_dict,
                                              self.max_cav)
@@ -94,6 +97,7 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
 
         # loop over all CAVs to process information
         for cav_id, selected_cav_base in base_data_dict.items():
+
             # check if the cav is within the communication range with ego
             distance = \
                 math.sqrt((selected_cav_base['params']['lidar_pose'][0] -
@@ -110,9 +114,15 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
 
             object_stack.append(selected_cav_processed['object_bbx_center'])
             object_id_stack += selected_cav_processed['object_ids']
-            processed_features.append(
-                selected_cav_processed['processed_features'])
+            #if cav_id == ego_id:
 
+            processed_features.append(selected_cav_processed['processed_features'])
+            # N, 32, 4
+            #print(selected_cav_processed['processed_features']['voxel_features'].shape)
+            # N, 3
+            #print(selected_cav_processed['processed_features']['voxel_coords'].shape)
+            # N
+            #print(selected_cav_processed['processed_features']['voxel_num_points'].shape)
             velocity.append(selected_cav_processed['velocity'])
             time_delay.append(float(selected_cav_base['time_delay']))
             # this is only useful when proj_first = True, and communication
@@ -146,6 +156,8 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
         cav_num = len(processed_features)
         merged_feature_dict = self.merge_features_to_dict(processed_features)
 
+        #print(merged_feature_dict['voxel_features'][4].shape)
+
         # generate the anchor boxes
         anchor_box = self.post_processor.generate_anchor_box()
 
@@ -155,7 +167,6 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
                 gt_box_center=object_bbx_center,
                 anchors=anchor_box,
                 mask=mask)
-
         # pad dv, dt, infra to max_cav
         velocity = velocity + (self.max_cav - len(velocity)) * [0.]
         time_delay = time_delay + (self.max_cav - len(time_delay)) * [0.]
@@ -178,7 +189,9 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
              'time_delay': time_delay,
              'infra': infra,
              'spatial_correction_matrix': spatial_correction_matrix,
-             'pairwise_t_matrix': pairwise_t_matrix})
+             'pairwise_t_matrix': pairwise_t_matrix,
+             'camera_files': camera_files,
+             'pert': torch.rand(4)})
 
         if self.visualize:
             processed_data_dict['ego'].update({'origin_lidar':
@@ -289,7 +302,7 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
         velocity = []
         time_delay = []
         infra = []
-
+        camera_files = []
         # pairwise transformation matrix
         pairwise_t_matrix_list = []
 
@@ -302,6 +315,7 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
 
         for i in range(len(batch)):
             ego_dict = batch[i]['ego']
+            camera_files.append(ego_dict['camera_files'])
             object_bbx_center.append(ego_dict['object_bbx_center'])
             object_bbx_mask.append(ego_dict['object_bbx_mask'])
             object_ids.append(ego_dict['object_ids'])
@@ -355,7 +369,9 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
                                    'object_ids': object_ids[0],
                                    'prior_encoding': prior_encoding,
                                    'spatial_correction_matrix': spatial_correction_matrix_list,
-                                   'pairwise_t_matrix': pairwise_t_matrix})
+                                   'pairwise_t_matrix': pairwise_t_matrix,
+                                   'camera_files': camera_files,
+                                   'pert': torch.rand(4)}) #placeholder
 
         if self.visualize:
             origin_lidar = \
@@ -434,6 +450,9 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
             # becomes identity
             pairwise_t_matrix[:, :] = np.identity(4)
         else:
+            warnings.warn("Projection later is not supported in "
+                          "the current version. Using it will throw"
+                          "an error.")
             t_list = []
 
             # save all transformation matrix in a list in order first.
@@ -444,8 +463,6 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
                 for j in range(len(t_list)):
                     # identity matrix to self
                     if i == j:
-                        t_matrix = np.eye(4)
-                        pairwise_t_matrix[i, j] = t_matrix
                         continue
                     # i->j: TiPi=TjPj, Tj^(-1)TiPi = Pj
                     t_matrix = np.dot(np.linalg.inv(t_list[j]), t_list[i])

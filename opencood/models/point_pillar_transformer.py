@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import sys
 
 from opencood.models.sub_modules.pillar_vfe import PillarVFE
 from opencood.models.sub_modules.point_pillar_scatter import PointPillarScatter
@@ -8,6 +9,7 @@ from opencood.models.fuse_modules.fuse_utils import regroup
 from opencood.models.sub_modules.downsample_conv import DownsampleConv
 from opencood.models.sub_modules.naive_compress import NaiveCompressor
 from opencood.models.fuse_modules.v2xvit_basic import V2XTransformer
+
 
 
 class PointPillarTransformer(nn.Module):
@@ -68,7 +70,68 @@ class PointPillarTransformer(nn.Module):
         for p in self.reg_head.parameters():
             p.requires_grad = False
 
-    def forward(self, data_dict):
+    def adv_step(self, data_dict, attacker, eps):
+        voxel_features = data_dict['processed_lidar']['voxel_features']
+        voxel_coords = data_dict['processed_lidar']['voxel_coords']
+        voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
+        record_len = data_dict['record_len']
+        spatial_correction_matrix = data_dict['spatial_correction_matrix']
+
+        # B, max_cav, 3(dt dv infra), 1, 1
+        prior_encoding =\
+            data_dict['prior_encoding'].unsqueeze(-1).unsqueeze(-1)
+
+        batch_dict = {'voxel_features': voxel_features,
+                      'voxel_coords': voxel_coords,
+                      'voxel_num_points': voxel_num_points,
+                      'record_len': record_len}
+        # n, 4 -> n, c
+        batch_dict = self.pillar_vfe(batch_dict)
+        # n, c -> N, C, H, W
+        batch_dict = self.scatter(batch_dict)
+        batch_dict = self.backbone(batch_dict)
+        #spatial_features_2d -> [cav, 384, 96, 352]
+        spatial_features_2d = batch_dict['spatial_features_2d']
+
+        #add adversarial perturbation to feature map
+        pert = data_dict['pert']
+        pert = torch.clamp(pert, min=-eps, max=eps)
+        spatial_features_2d[attacker] += pert
+
+        # downsample feature to reduce memory
+        if self.shrink_flag:
+            spatial_features_2d = self.shrink_conv(spatial_features_2d)
+        # compressor
+        if self.compression:
+            spatial_features_2d = self.naive_compressor(spatial_features_2d)
+        # N, C, H, W -> B,  L, C, H, W
+        regroup_feature, mask = regroup(spatial_features_2d,
+                                        record_len,
+                                        self.max_cav)
+
+        # prior encoding added
+        prior_encoding = prior_encoding.repeat(1, 1, 1,
+                                               regroup_feature.shape[3],
+                                               regroup_feature.shape[4])
+        regroup_feature = torch.cat([regroup_feature, prior_encoding], dim=2)
+
+        # b l c h w -> b l h w c
+        regroup_feature = regroup_feature.permute(0, 1, 3, 4, 2)
+        # transformer fusion
+        fused_feature = self.fusion_net(regroup_feature, mask, spatial_correction_matrix)
+        # b h w c -> b c h w
+        fused_feature = fused_feature.permute(0, 3, 1, 2)
+
+        psm = self.cls_head(fused_feature)
+        rm = self.reg_head(fused_feature)
+
+        output_dict = {'psm': psm,
+                       'rm': rm}
+
+        return output_dict
+
+
+    def random_pert_step(self, data_dict, attacker, eps):
         voxel_features = data_dict['processed_lidar']['voxel_features']
         voxel_coords = data_dict['processed_lidar']['voxel_coords']
         voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
@@ -89,6 +152,70 @@ class PointPillarTransformer(nn.Module):
         batch_dict = self.scatter(batch_dict)
         batch_dict = self.backbone(batch_dict)
 
+        #spatial_features_2d -> [cav, 384, 96, 352]
+        spatial_features_2d = batch_dict['spatial_features_2d']
+
+        #pert in the uniform range [-eps, eps]
+        pert = (-eps + eps) * torch.rand(384, 96, 352) + eps
+        pert = pert.to(device='cuda')
+
+        #select random attacker
+        #random_cav = torch.randint(0, spatial_features_2d.shape[0], (1,))
+        spatial_features_2d[attacker] += pert
+
+        # downsample feature to reduce memory
+        if self.shrink_flag:
+            spatial_features_2d = self.shrink_conv(spatial_features_2d)
+        # compressor
+        if self.compression:
+            spatial_features_2d = self.naive_compressor(spatial_features_2d)
+        # N, C, H, W -> B,  L, C, H, W
+        regroup_feature, mask = regroup(spatial_features_2d,
+                                        record_len,
+                                        self.max_cav)
+
+        # prior encoding added
+        prior_encoding = prior_encoding.repeat(1, 1, 1,
+                                               regroup_feature.shape[3],
+                                               regroup_feature.shape[4])
+        regroup_feature = torch.cat([regroup_feature, prior_encoding], dim=2)
+
+        # b l c h w -> b l h w c
+        regroup_feature = regroup_feature.permute(0, 1, 3, 4, 2)
+        # transformer fusion
+        fused_feature = self.fusion_net(regroup_feature, mask, spatial_correction_matrix)
+        # b h w c -> b c h w
+        fused_feature = fused_feature.permute(0, 3, 1, 2)
+
+        psm = self.cls_head(fused_feature)
+        rm = self.reg_head(fused_feature)
+
+        output_dict = {'psm': psm,
+                       'rm': rm}
+
+        return output_dict
+
+    def forward(self, data_dict):
+        voxel_features = data_dict['processed_lidar']['voxel_features']
+        voxel_coords = data_dict['processed_lidar']['voxel_coords']
+        voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
+        record_len = data_dict['record_len']
+        spatial_correction_matrix = data_dict['spatial_correction_matrix']
+
+        # B, max_cav, 3(dt dv infra), 1, 1
+        prior_encoding =\
+            data_dict['prior_encoding'].unsqueeze(-1).unsqueeze(-1)
+
+        batch_dict = {'voxel_features': voxel_features,
+                      'voxel_coords': voxel_coords,
+                      'voxel_num_points': voxel_num_points,
+                      'record_len': record_len}
+        # n, 4 -> n, c
+        batch_dict = self.pillar_vfe(batch_dict)
+        # n, c -> N, C, H, W
+        batch_dict = self.scatter(batch_dict)
+        batch_dict = self.backbone(batch_dict)
+        #spatial_features_2d -> [cav, 384, 96, 352]
         spatial_features_2d = batch_dict['spatial_features_2d']
         # downsample feature to reduce memory
         if self.shrink_flag:
@@ -100,6 +227,7 @@ class PointPillarTransformer(nn.Module):
         regroup_feature, mask = regroup(spatial_features_2d,
                                         record_len,
                                         self.max_cav)
+
         # prior encoding added
         prior_encoding = prior_encoding.repeat(1, 1, 1,
                                                regroup_feature.shape[3],
