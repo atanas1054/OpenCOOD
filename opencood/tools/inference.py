@@ -7,6 +7,8 @@ import argparse
 import os
 import time
 from tqdm import tqdm
+import copy
+from collections import OrderedDict
 
 import torch
 import open3d as o3d
@@ -107,7 +109,7 @@ def main():
         for _ in range(50):
             vis_aabbs_gt.append(o3d.geometry.LineSet())
             vis_aabbs_pred.append(o3d.geometry.LineSet())
-
+    unperturbed_model = copy.deepcopy(model)
     for i, batch_data in tqdm(enumerate(data_loader)):
         # print(i)
         batch_data = train_utils.to_device(batch_data, device)
@@ -134,6 +136,19 @@ def main():
             # initialize perturbation tensor
             pert = torch.empty(384, 96, 352).uniform_(-adv_eps, adv_eps)
 
+            #get output of model without an attack
+            output_ = unperturbed_model(batch_data['ego'])
+            output_['rm'] = output_['rm'].permute(0,2,3,1)
+            output_['psm'] = output_['psm'].permute(0,2,3,1)
+            output_['psm'] = torch.sigmoid(output_['psm'])
+            output_['psm'][output_['psm'] < 0.5] = 0
+            output_['psm'][output_['psm'] >= 0.5] = 1
+            pseudo_dict = OrderedDict()
+            pseudo_dict['targets'] = output_['rm']
+            pseudo_dict['pos_equal_one'] = output_['psm']
+            #log_probs_ = torch.nn.functional.softmax(cls_preds, dim=1)
+
+
             # adversarial attack steps (PGD)
             adv_steps = 10
             for _ in range(adv_steps):
@@ -141,7 +156,19 @@ def main():
                 # Introduce adv perturbation
                 batch_data['ego']['pert'] = pert.to(device)
                 output = model.adv_step(batch_data['ego'], attacker, adv_eps)
-                loss = criterion(output, batch_data['ego']['label_dict'])
+                #psm = output['psm']
+                #cls_preds = psm.permute(0, 2, 3, 1).contiguous()
+                #cls_preds = cls_preds.view(psm.shape[0], -1, 1)
+                #log_probs = torch.nn.functional.softmax(cls_preds, dim=1)
+
+
+                #print(output['psm'].shape)
+                #loss = criterion(output, batch_data['ego']['label_dict'])
+                # NOTE: Actual ground truth is not always available especially in real-world attacks
+                # We define the adversarial loss of the perturbed output
+                # with respect to an unperturbed output (pseudo_dict) instead of the ground truth
+                #loss = torch.nn.functional.kl_div(log_probs_, log_probs, reduction='batchmean')
+                loss = criterion(output, pseudo_dict)
                 #loss *= -1
                 grad = torch.autograd.grad(loss, pert, retain_graph=False, create_graph=False)[0]
                 pert = pert + pert_alpha * grad.sign()
