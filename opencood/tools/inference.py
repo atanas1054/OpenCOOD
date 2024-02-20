@@ -114,7 +114,7 @@ def main():
         # print(i)
         batch_data = train_utils.to_device(batch_data, device)
         ###adversarial attack#####
-        if opt.adv_attack:
+        if opt.adv_attack and 1 < batch_data['ego']['record_len'][0]:
 
             criterion = train_utils.create_loss(hypes)
             model.train()
