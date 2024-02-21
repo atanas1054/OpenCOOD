@@ -96,7 +96,8 @@ class PointPillarTransformer(nn.Module):
         #add adversarial perturbation to feature map
         pert = data_dict['pert']
         pert = torch.clamp(pert, min=-eps, max=eps)
-        spatial_features_2d[attacker] += pert
+        if spatial_features_2d.shape[0] > 1:
+           spatial_features_2d[attacker] += pert
 
         # downsample feature to reduce memory
         if self.shrink_flag:
@@ -161,7 +162,8 @@ class PointPillarTransformer(nn.Module):
 
         #select random attacker
         #random_cav = torch.randint(0, spatial_features_2d.shape[0], (1,))
-        spatial_features_2d[attacker] += pert
+        if spatial_features_2d.shape[0] > 1:
+            spatial_features_2d[attacker] += pert
 
         # downsample feature to reduce memory
         if self.shrink_flag:
