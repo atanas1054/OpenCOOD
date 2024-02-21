@@ -61,7 +61,7 @@ def inference_early_fusion(batch_data, model, dataset, opt):
     output_dict = OrderedDict()
     cav_content = batch_data['ego']
 
-    if opt.adv_attack:
+    if opt.adv_attack and 1 < batch_data['ego']['record_len'][0]:
         output_dict['ego'] = model.adv_step(cav_content, opt.adv_attacker, opt.adv_eps)
     elif opt.random_perturb:
         output_dict['ego'] = model.random_pert_step(cav_content, opt.adv_attacker, opt.adv_eps)
