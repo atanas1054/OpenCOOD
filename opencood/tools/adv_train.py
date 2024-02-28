@@ -20,7 +20,7 @@ from opencood.tools import multi_gpu_utils
 from opencood.data_utils.datasets import build_dataset
 from opencood.tools import train_utils
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 def train_parser():
     parser = argparse.ArgumentParser(description="synthetic data generation")
@@ -148,94 +148,96 @@ def main():
         pbar2 = tqdm.tqdm(total=len(train_loader), leave=True)
 
         for i, batch_data in enumerate(train_loader):
-            # the model will be evaluation mode during validation
-            model.train()
-            model.zero_grad()
-            optimizer.zero_grad()
 
-            batch_data = train_utils.to_device(batch_data, device)
+            #if there is more than one CAV in the scene
+            if 1 < batch_data['ego']['record_len'][0]:
+                # the model will be evaluation mode during validation
+                model.train()
+                model.zero_grad()
+                optimizer.zero_grad()
 
-            for k, v in model.named_parameters():
-                v.requires_grad = False
+                batch_data = train_utils.to_device(batch_data, device)
 
-            # fix attackers, agent 1 always attacks
-            # could sample a random attacker as well, or be learned
-            attacker = opt.adv_attacker
+                for k, v in model.named_parameters():
+                    v.requires_grad = False
 
-            # initialize perturbation magnitude
-            adv_eps = opt.adv_eps
-            # batch_data['adv_eps'] = adv_eps
+                # fix attackers, agent 1 always attacks
+                # could sample a random attacker as well, or be learned
+                attacker = opt.adv_attacker
 
-            # initialize perturbation alpha
-            pert_alpha = opt.adv_alpha
+                # initialize perturbation magnitude
+                adv_eps = opt.adv_eps
+                # batch_data['adv_eps'] = adv_eps
 
-            # initialize perturbation tensor
-            pert = torch.empty(384, 96, 352).uniform_(-adv_eps, adv_eps)
+                # initialize perturbation alpha
+                pert_alpha = opt.adv_alpha
 
-            #get output of model without an attack
-            output_ = unperturbed_model(batch_data['ego'])
-            output_['rm'] = output_['rm'].permute(0,2,3,1)
-            output_['psm'] = output_['psm'].permute(0,2,3,1)
-            output_['psm'] = torch.sigmoid(output_['psm'])
-            output_['psm'][output_['psm'] < 0.5] = 0
-            output_['psm'][output_['psm'] >= 0.5] = 1
-            pseudo_dict = OrderedDict()
-            pseudo_dict['targets'] = output_['rm']
-            pseudo_dict['pos_equal_one'] = output_['psm']
+                # initialize perturbation tensor
+                pert = torch.empty(384, 96, 352).uniform_(-adv_eps, adv_eps)
 
-            # adversarial attack steps (PGD)
-            adv_steps = 10
-            for _ in range(adv_steps):
-                pert.requires_grad = True
-                # Introduce adv perturbation
+                #get output of model without an attack
+                output_ = unperturbed_model(batch_data['ego'])
+                output_['rm'] = output_['rm'].permute(0,2,3,1)
+                output_['psm'] = output_['psm'].permute(0,2,3,1)
+                output_['psm'] = torch.sigmoid(output_['psm'])
+                output_['psm'][output_['psm'] < 0.5] = 0
+                output_['psm'][output_['psm'] >= 0.5] = 1
+                pseudo_dict = OrderedDict()
+                pseudo_dict['targets'] = output_['rm']
+                pseudo_dict['pos_equal_one'] = output_['psm']
+
+                # adversarial attack steps (PGD)
+                adv_steps = 10
+                for _ in range(adv_steps):
+                    pert.requires_grad = True
+                    # Introduce adv perturbation
+                    batch_data['ego']['pert'] = pert.to(device)
+                    output = model.adv_step(batch_data['ego'], attacker, adv_eps)
+                    # NOTE: Actual ground truth is not always available especially in real-world attacks
+                    # We define the adversarial loss of the perturbed output
+                    # with respect to an unperturbed output (pseudo_dict) instead of the ground truth
+                    loss = criterion(output, pseudo_dict)
+                    #loss *= -1
+                    grad = torch.autograd.grad(loss, pert, retain_graph=False, create_graph=False)[0]
+                    pert = pert + pert_alpha * grad.sign()
+                    pert.detach_()
+
+                # Detach and clone perturbations from Pytorch computation graph, in case of gradient misuse.
+                pert = pert.detach().clone()
+
+                # Apply the final perturbation to attackers' feature maps.
                 batch_data['ego']['pert'] = pert.to(device)
-                output = model.adv_step(batch_data['ego'], attacker, adv_eps)
-                # NOTE: Actual ground truth is not always available especially in real-world attacks
-                # We define the adversarial loss of the perturbed output
-                # with respect to an unperturbed output (pseudo_dict) instead of the ground truth
-                loss = criterion(output, pseudo_dict)
-                #loss *= -1
-                grad = torch.autograd.grad(loss, pert, retain_graph=False, create_graph=False)[0]
-                pert = pert + pert_alpha * grad.sign()
-                pert.detach_()
-
-            # Detach and clone perturbations from Pytorch computation graph, in case of gradient misuse.
-            pert = pert.detach().clone()
-
-            # Apply the final perturbation to attackers' feature maps.
-            batch_data['ego']['pert'] = pert.to(device)
 
 
-            #continue normal/adversarial training
+                #continue normal/adversarial training
+                for k, v in model.named_parameters():
+                    v.requires_grad = True  # update parameters for adv training forward
 
-            for k, v in model.named_parameters():
-                v.requires_grad = True  # update parameters for adv training forward
-
-            if not opt.half:
-                #ouput_dict = model(batch_data['ego'])
-                output_dict = model.adv_step(batch_data['ego'], attacker, adv_eps)
-                # first argument is always your output dictionary,
-                # second argument is always your label dictionary.
-                final_loss = criterion(ouput_dict,
-                                       batch_data['ego']['label_dict'])
-            else:
-                with torch.cuda.amp.autocast():
-                   # ouput_dict = model(batch_data['ego'])
+                if not opt.half:
+                    #ouput_dict = model(batch_data['ego'])
                     output_dict = model.adv_step(batch_data['ego'], attacker, adv_eps)
-                    final_loss = criterion(ouput_dict,
+                    # first argument is always your output dictionary,
+                    # second argument is always your label dictionary.
+                    final_loss = criterion(output_dict,
                                            batch_data['ego']['label_dict'])
+                else:
+                    with torch.cuda.amp.autocast():
+                        #ouput_dict = model(batch_data['ego'])
+                        output_dict = model.adv_step(batch_data['ego'], attacker, adv_eps)
+                        final_loss = criterion(output_dict,
+                                               batch_data['ego']['label_dict'])
 
 
-            criterion.logging(epoch, i, len(train_loader), writer, pbar=pbar2)
-            pbar2.update(1)
-            #
-            if not opt.half:
-                final_loss.backward()
-                optimizer.step()
-            else:
-                scaler.scale(final_loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                criterion.logging(epoch, i, len(train_loader), writer, pbar=pbar2)
+                pbar2.update(1)
+                #
+                if not opt.half:
+                    final_loss.backward()
+                    optimizer.step()
+                else:
+                    scaler.scale(final_loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
 
 
             if hypes['lr_scheduler']['core_method'] == 'cosineannealwarm':
