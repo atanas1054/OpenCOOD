@@ -1,10 +1,10 @@
 name: point_pillar_intermediate_fusion
-root_dir: "opv2v_data_dumping/train"
-validate_dir: "opv2v_data_dumping/validate"
+root_dir: "/mnt/data/fare01/OpenCOOD/v2xset/train"
+validate_dir: "/mnt/data/fare01/OpenCOOD/v2xset/validate"
 
 yaml_parser: "load_point_pillar_params"
 train_params:
-  batch_size: &batch_size 2
+  batch_size: &batch_size 8
   epoches: 15
   eval_freq: 1
   save_freq: 1

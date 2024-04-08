@@ -15,7 +15,7 @@ class PointPillarScatter(nn.Module):
         pillar_features, coords = batch_dict['pillar_features'], batch_dict[
             'voxel_coords']
         batch_spatial_features = []
-        batch_size = coords[:, 0].max().int().item() + 1
+        batch_size = coords[:, 0].max().int().item() + 1  # chera baraye batch size 8  21 shod?
 
         for batch_idx in range(batch_size):
             spatial_feature = torch.zeros(

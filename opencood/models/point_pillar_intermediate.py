@@ -31,9 +31,9 @@ class PointPillarIntermediate(nn.Module):
 
     def forward(self, data_dict):
 
-        voxel_features = data_dict['processed_lidar']['voxel_features']
-        voxel_coords = data_dict['processed_lidar']['voxel_coords']
-        voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
+        voxel_features = data_dict['processed_lidar']['voxel_features']  # [N, 32, 4] all voxels from different samples are concat as N
+        voxel_coords = data_dict['processed_lidar']['voxel_coords']  # [N, 4]
+        voxel_num_points = data_dict['processed_lidar']['voxel_num_points']  # [N]
         record_len = data_dict['record_len']
 
         batch_dict = {'voxel_features': voxel_features,

@@ -20,7 +20,7 @@ from opencood.tools import multi_gpu_utils
 from opencood.data_utils.datasets import build_dataset
 from opencood.tools import train_utils
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 def train_parser():
     parser = argparse.ArgumentParser(description="synthetic data generation")
@@ -84,7 +84,7 @@ def main():
                                 shuffle=False,
                                 pin_memory=False,
                                 drop_last=True)
-
+    # print(os.environ)
     print('---------------Creating Model------------------')
     model = train_utils.create_model(hypes)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -187,7 +187,7 @@ def main():
                 pseudo_dict['pos_equal_one'] = output_['psm']
 
                 # adversarial attack steps (PGD)
-                adv_steps = 10
+                adv_steps = 5
                 for _ in range(adv_steps):
                     pert.requires_grad = True
                     # Introduce adv perturbation
@@ -198,6 +198,9 @@ def main():
                     # with respect to an unperturbed output (pseudo_dict) instead of the ground truth
                     loss = criterion(output, pseudo_dict)
                     #loss *= -1
+                    batch_len = len(train_loader)
+                    writer.add_scalar('Regression_loss', loss.item(),
+                                      epoch * batch_len + i)
                     grad = torch.autograd.grad(loss, pert, retain_graph=False, create_graph=False)[0]
                     pert = pert + pert_alpha * grad.sign()
                     pert.detach_()

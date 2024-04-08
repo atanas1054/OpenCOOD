@@ -70,7 +70,7 @@ class PointPillarTransformer(nn.Module):
         for p in self.reg_head.parameters():
             p.requires_grad = False
 
-    def adv_step(self, data_dict, attacker, eps):
+    def adv_step(self, data_dict, attacker, eps, attack=None, radius=None, device=None):
         voxel_features = data_dict['processed_lidar']['voxel_features']
         voxel_coords = data_dict['processed_lidar']['voxel_coords']
         voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
@@ -97,7 +97,10 @@ class PointPillarTransformer(nn.Module):
         pert = data_dict['pert']
         pert = torch.clamp(pert, min=-eps, max=eps)
         if spatial_features_2d.shape[0] > 1:
-           spatial_features_2d[attacker] += pert
+            if attack == 'vmifgsm':
+                spatial_features_2d[attacker] += pert + torch.zeros_like(pert).uniform_(radius, radius).to(device)
+            else:
+                spatial_features_2d[attacker] += pert
 
         # downsample feature to reduce memory
         if self.shrink_flag:

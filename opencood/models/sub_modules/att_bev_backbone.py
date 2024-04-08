@@ -5,7 +5,6 @@ import torch.nn as nn
 from opencood.models.fuse_modules.self_attn import AttFusion
 from opencood.models.sub_modules.auto_encoder import AutoEncoder
 
-
 class AttBEVBackbone(nn.Module):
     def __init__(self, model_cfg, input_channels):
         super().__init__()
@@ -123,7 +122,7 @@ class AttBEVBackbone(nn.Module):
             x = self.blocks[i](x)
             if self.compress and i < len(self.compression_modules):
                 x = self.compression_modules[i](x)
-            x_fuse = self.fuse_modules[i](x, record_len)
+            x_fuse = self.fuse_modules[i](x, record_len)  # [inja mishe pert ezafe kard!]
 
             stride = int(spatial_features.shape[2] / x.shape[2])
             ret_dict['spatial_features_%dx' % stride] = x

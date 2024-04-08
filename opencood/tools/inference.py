@@ -33,6 +33,9 @@ def test_parser():
                         help='whether to show image visualization result')
     parser.add_argument('--adv_attack', action='store_true',
                         help='whether to do an adversarial attack ')
+    parser.add_argument('--attack', type=str,
+                        default='pgd',
+                        help='pgd, mifgsm or ...')
     parser.add_argument('--adv_attacker', default=1, type=int,
                         help='whether to do an adversarial attack ')
     parser.add_argument('--adv_eps', default=0.01, type=float,
@@ -52,6 +55,26 @@ def test_parser():
     opt = parser.parse_args()
     return opt
 
+def get_momentum(grad, momentum, decay):
+    return momentum * decay + grad / (grad.abs().mean(dim=(0, 1, 2), keepdim=True))
+
+def get_variance(model, data, delta, label, cur_grad, momentum, radius):
+    """
+    Calculate the gradient variance
+    """
+    grad = 0
+    for _ in range(self.num_neighbor):
+        # Obtain the output
+        # This is inconsistent for transform!
+        logits = data+delta+torch.zeros_like(delta).uniform_(radius, radius)
+
+        # Calculate the loss
+        loss = self.get_loss(logits, label)
+        output = model.adv_step(batch_data['ego'], attacker, adv_eps)
+        # Calculate the gradients
+        grad += self.get_grad(loss, delta)
+
+    return grad / self.num_neighbor - cur_grad
 
 def main():
     opt = test_parser()
@@ -138,8 +161,8 @@ def main():
 
             #get output of model without an attack
             output_ = unperturbed_model(batch_data['ego'])
-            output_['rm'] = output_['rm'].permute(0,2,3,1)
-            output_['psm'] = output_['psm'].permute(0,2,3,1)
+            # output_['rm'] = output_['rm'].permute(0,2,3,1)
+            # output_['psm'] = output_['psm'].permute(0,2,3,1)
             output_['psm'] = torch.sigmoid(output_['psm'])
             output_['psm'][output_['psm'] < 0.5] = 0
             output_['psm'][output_['psm'] >= 0.5] = 1
@@ -150,7 +173,13 @@ def main():
 
 
             # adversarial attack steps (PGD)
-            adv_steps = 10
+            adv_steps = 5
+            momentum = 0.
+            variance = 0.
+            decay = 1.0
+            num_neighbor = 5
+            beta = 1.5
+            radius = beta * adv_eps
             for _ in range(adv_steps):
                 pert.requires_grad = True
                 # Introduce adv perturbation
@@ -171,7 +200,28 @@ def main():
                 loss = criterion(output, pseudo_dict)
                 #loss *= -1
                 grad = torch.autograd.grad(loss, pert, retain_graph=False, create_graph=False)[0]
-                pert = pert + pert_alpha * grad.sign()
+                if opt.attack == 'pgd': #ifgsm
+                    pert = pert + pert_alpha * grad.sign()
+                elif opt.attack == 'mifgsm':
+                    momentum = get_momentum(grad, momentum, decay)
+                    pert = pert + pert_alpha * momentum.sign()
+                elif opt.attack == 'vmifgsm':
+                    # Calculate the variance
+                    momentum = get_momentum(grad + variance, momentum, decay)
+                    """
+                        Calculate the gradient variance
+                        """
+                    grad_ = 0
+                    for _ in range(num_neighbor):
+
+                        output = model.adv_step(batch_data['ego'], attacker, adv_eps, attack='vmifgsm', radius=radius, device=device)
+                        loss = criterion(output, pseudo_dict)
+                        # Calculate the gradients
+                        grad_ += torch.autograd.grad(loss, pert, retain_graph=False, create_graph=False)[0]
+                    variance = grad_ / num_neighbor - grad
+
+                    pert = pert + pert_alpha * momentum.sign()
+
                 pert.detach_()
 
             # Detach and clone perturbations from Pytorch computation graph, in case of gradient misuse.

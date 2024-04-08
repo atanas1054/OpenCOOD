@@ -81,7 +81,7 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
             self.get_pairwise_transformation(base_data_dict,
                                              self.max_cav)
 
-        processed_features = []
+        processed_features = []  # the most important thing to keep in mind from this part
         object_stack = []
         object_id_stack = []
 
@@ -161,7 +161,7 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
         # generate the anchor boxes
         anchor_box = self.post_processor.generate_anchor_box()
 
-        # generate targets label
+        # generate targets label: mese detection mamoolie?????
         label_dict = \
             self.post_processor.generate_label(
                 gt_box_center=object_bbx_center,
@@ -221,7 +221,7 @@ class IntermediateFusionDataset(basedataset.BaseDataset):
         transformation_matrix = \
             selected_cav_base['params']['transformation_matrix']
 
-        # retrieve objects under ego coordinates
+        # retrieve objects under ego coordinates: chera num e object_bbx_center az object_ids bishtare?
         object_bbx_center, object_bbx_mask, object_ids = \
             self.post_processor.generate_object_center([selected_cav_base],
                                                        ego_pose)

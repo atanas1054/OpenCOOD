@@ -20,6 +20,8 @@ from opencood.hypes_yaml.yaml_utils import load_yaml
 from opencood.utils.pcd_utils import downsample_lidar_minimum
 from opencood.utils.transformation_utils import x1_to_x2
 
+from os.path import dirname, abspath
+
 
 class BaseDataset(Dataset):
     """
@@ -115,10 +117,11 @@ class BaseDataset(Dataset):
         else:
             self.max_cav = params['train_params']['max_cav']
 
+        root = dirname(dirname(dirname(dirname(abspath(__file__)))))
         # first load all paths of different scenarios
-        scenario_folders = sorted([os.path.join(root_dir, x)
-                                   for x in os.listdir(root_dir) if
-                                   os.path.isdir(os.path.join(root_dir, x))])
+        scenario_folders = sorted([os.path.join(root, root_dir, x)
+                                   for x in os.listdir(os.path.join(root, root_dir)) if
+                                   os.path.isdir(os.path.join(root, root_dir, x))])
         # Structure: {scenario_id : {cav_1 : {timestamp1 : {yaml: path,
         # lidar: path, cameras:list of path}}}}
         self.scenario_database = OrderedDict()
